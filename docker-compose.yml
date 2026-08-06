@@ -1,0 +1,34 @@
+services:
+  vfe-bot-t:
+    image: ghcr.io/flavius-vfe/vfe-bot-t:latest
+    build:
+      context: .
+    container_name: vfe-bot-t
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/data
+      - /mnt/user:/host-mnt/user:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 192m
+    pids_limit: 80
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,time; p='/data/heartbeat'; assert os.path.exists(p) and time.time()-os.path.getmtime(p)<90"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
