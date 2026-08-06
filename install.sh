@@ -73,4 +73,5 @@ docker compose up -d --build
 echo
 echo "VFE Docker Bot is running."
 echo "Logs: docker compose logs -f"
-echo "Update later: git pull && docker compose up -d --build"
+echo "Update later: bash update.sh"
+echo "Uninstall: bash uninstall.sh"

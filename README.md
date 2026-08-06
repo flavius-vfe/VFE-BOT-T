@@ -2,7 +2,18 @@
 
 A lightweight, button-first Telegram controller that automatically discovers Docker containers on an Unraid server. It does not run an LLM and is designed for small systems.
 
-## v0.4.0 highlights
+## v0.4.1 maintenance release
+
+This release keeps the v0.4 container, stack, monitoring, scheduling, export, and diagnostics features while tightening repository hygiene and license compliance:
+
+- Adds `uninstall.sh` with safe keep-data and permanent purge modes
+- Adds `.dockerignore` so `.env`, databases, logs, tests, and runtime data never enter the Docker build context
+- Includes direct dependency license texts and third-party notices
+- Generates a complete license bundle for every Python dependency installed in the Docker image
+- Fails the Docker build if an installed dependency has no recognizable license or notice file
+- Removes generated validation reports and release-only notes from the repository package
+
+## v0.4 features
 
 ### Rich container status
 
@@ -158,6 +169,49 @@ docker compose up -d --build --remove-orphans
 
 The existing database is migrated automatically at startup.
 
+## Uninstalling
+
+A normal uninstall removes the running container and Compose network but keeps `.env`, the SQLite database, schedules, audit history, and repository files so you can reinstall easily:
+
+```bash
+cd /mnt/user/appdata/vfe-bot-t
+bash uninstall.sh
+```
+
+Non-interactive equivalent:
+
+```bash
+cd /mnt/user/appdata/vfe-bot-t
+bash uninstall.sh --yes
+```
+
+To remove the container and its Docker image while still keeping configuration and data:
+
+```bash
+bash uninstall.sh --remove-image
+```
+
+To permanently delete the complete installation, including the Telegram token, pairing configuration, database, schedules, audit history, and repository directory:
+
+```bash
+cd /mnt/user/appdata/vfe-bot-t
+bash uninstall.sh --purge
+```
+
+Non-interactive permanent removal:
+
+```bash
+bash /mnt/user/appdata/vfe-bot-t/uninstall.sh --purge --yes
+```
+
+`--purge` cannot be undone. The script refuses known unsafe paths and verifies that the target looks like a VFE-BOT-T installation before deleting it.
+
+You can also run the non-purge uninstaller directly from GitHub:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/flavius-vfe/VFE-BOT-T/main/uninstall.sh | bash -s -- --yes
+```
+
 ## Configuration
 
 The installer creates `.env`. Useful settings:
@@ -198,6 +252,20 @@ For simple installation, this project mounts:
 Docker socket access is effectively administrator-level access to the Docker host. Keep the Telegram token and pairing code secret, pair only in a private chat, enable Telegram two-step verification, and protect critical containers using `PROTECTED_CONTAINERS`.
 
 The bot intentionally does not expose arbitrary shell execution, container creation, container deletion, or free-form Docker API calls.
+
+The `.dockerignore` file excludes `.env`, `data/`, databases, logs, tests, and Git history from the Docker build context. The Dockerfile also uses explicit `COPY` instructions and never copies the complete repository into the image.
+
+## Licenses
+
+VFE-BOT-T is licensed under the MIT License in `LICENSE`.
+
+Direct dependency license texts are stored under `licenses/third-party/`, and attribution details are summarized in `THIRD_PARTY_NOTICES.md`. During each image build, pip records exactly which direct and transitive dependencies were installed. Their packaged license and notice files are copied into:
+
+```text
+/usr/share/licenses/vfe-bot-t/
+```
+
+The image build stops with an error if that generated dependency license bundle is incomplete. Python and Debian license files supplied by the official `python:3.12-slim` base image remain in their standard locations.
 
 ## Development and testing
 
