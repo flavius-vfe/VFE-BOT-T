@@ -34,6 +34,10 @@ class Database:
         finally:
             connection.close()
 
+    @staticmethod
+    def _columns(db: sqlite3.Connection, table: str) -> set[str]:
+        return {str(row[1]) for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
+
     def initialize(self) -> None:
         with self.connect() as db:
             db.executescript(
@@ -73,9 +77,26 @@ class Database:
                     time_hhmm TEXT NOT NULL,
                     enabled INTEGER NOT NULL DEFAULT 1,
                     last_run_date TEXT,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    last_attempt_at TEXT,
+                    last_attempt_date TEXT,
+                    failure_count INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT
                 );
                 """
+            )
+            columns = self._columns(db, "schedules")
+            migrations = {
+                "last_attempt_at": "ALTER TABLE schedules ADD COLUMN last_attempt_at TEXT",
+                "last_attempt_date": "ALTER TABLE schedules ADD COLUMN last_attempt_date TEXT",
+                "failure_count": "ALTER TABLE schedules ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0",
+                "last_error": "ALTER TABLE schedules ADD COLUMN last_error TEXT",
+            }
+            for column, statement in migrations.items():
+                if column not in columns:
+                    db.execute(statement)
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_schedules_enabled_time ON schedules(enabled, time_hhmm)"
             )
 
     def get_owner(self) -> dict[str, Any] | None:
@@ -93,6 +114,16 @@ class Database:
                 "INSERT INTO owner(user_id, chat_id, username, created_at) VALUES (?, ?, ?, ?)",
                 (user_id, chat_id, username, iso(utcnow())),
             )
+            return True
+
+    def clear_owner(self, user_id: int) -> bool:
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            owner = db.execute("SELECT user_id FROM owner LIMIT 1").fetchone()
+            if not owner or int(owner["user_id"]) != user_id:
+                return False
+            db.execute("DELETE FROM approvals")
+            db.execute("DELETE FROM owner")
             return True
 
     def is_owner(self, user_id: int, chat_id: int) -> bool:
@@ -130,6 +161,7 @@ class Database:
     def claim_approval(self, approval_id: str, user_id: int) -> dict[str, Any] | None:
         now = utcnow()
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             row = db.execute(
                 "SELECT * FROM approvals WHERE id = ? AND user_id = ?",
                 (approval_id, user_id),
@@ -183,9 +215,24 @@ class Database:
             rows = db.execute("SELECT * FROM audit ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
             return [dict(row) for row in rows]
 
-    def add_schedule(self, container_name: str, time_hhmm: str) -> str:
-        schedule_id = secrets.token_hex(3)
+    def add_schedule(self, container_name: str, time_hhmm: str) -> tuple[str, bool]:
+        """Add or re-enable a unique container/time schedule.
+
+        Returns (schedule_id, created_new).
+        """
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT id, enabled FROM schedules WHERE container_name=? AND time_hhmm=? ORDER BY created_at LIMIT 1",
+                (container_name, time_hhmm),
+            ).fetchone()
+            if row:
+                db.execute(
+                    "UPDATE schedules SET enabled=1, failure_count=0, last_error=NULL WHERE id=?",
+                    (row["id"],),
+                )
+                return str(row["id"]), False
+            schedule_id = secrets.token_hex(3)
             db.execute(
                 """
                 INSERT INTO schedules(id, container_name, time_hhmm, enabled, created_at)
@@ -193,7 +240,7 @@ class Database:
                 """,
                 (schedule_id, container_name, time_hhmm, iso(utcnow())),
             )
-        return schedule_id
+            return schedule_id, True
 
     def list_schedules(self, enabled_only: bool = False) -> list[dict[str, Any]]:
         query = "SELECT * FROM schedules"
@@ -208,6 +255,41 @@ class Database:
             result = db.execute("UPDATE schedules SET enabled=0 WHERE id=? AND enabled=1", (schedule_id,))
             return result.rowcount == 1
 
-    def mark_schedule_run(self, schedule_id: str, local_date: str) -> None:
+    def disable_schedules_for_missing(self, existing_names: set[str]) -> list[str]:
         with self.connect() as db:
-            db.execute("UPDATE schedules SET last_run_date=? WHERE id=?", (local_date, schedule_id))
+            rows = db.execute("SELECT id, container_name FROM schedules WHERE enabled=1").fetchall()
+            missing = [dict(row) for row in rows if str(row["container_name"]) not in existing_names]
+            for item in missing:
+                db.execute("UPDATE schedules SET enabled=0, last_error='container removed' WHERE id=?", (item["id"],))
+            return [str(item["container_name"]) for item in missing]
+
+    def mark_schedule_attempt(self, schedule_id: str, attempted_at: datetime) -> None:
+        stamp = iso(attempted_at)
+        local_date = attempted_at.date().isoformat()
+        with self.connect() as db:
+            row = db.execute("SELECT last_attempt_date FROM schedules WHERE id=?", (schedule_id,)).fetchone()
+            reset = not row or row["last_attempt_date"] != local_date
+            if reset:
+                db.execute(
+                    "UPDATE schedules SET last_attempt_at=?, last_attempt_date=?, failure_count=0, last_error=NULL WHERE id=?",
+                    (stamp, local_date, schedule_id),
+                )
+            else:
+                db.execute(
+                    "UPDATE schedules SET last_attempt_at=?, last_attempt_date=? WHERE id=?",
+                    (stamp, local_date, schedule_id),
+                )
+
+    def mark_schedule_success(self, schedule_id: str, local_date: str) -> None:
+        with self.connect() as db:
+            db.execute(
+                "UPDATE schedules SET last_run_date=?, failure_count=0, last_error=NULL WHERE id=?",
+                (local_date, schedule_id),
+            )
+
+    def mark_schedule_failure(self, schedule_id: str, error: str) -> None:
+        with self.connect() as db:
+            db.execute(
+                "UPDATE schedules SET failure_count=failure_count+1, last_error=? WHERE id=?",
+                (error[:500], schedule_id),
+            )

@@ -1,54 +1,113 @@
 # VFE Docker Bot for Unraid
 
-A lightweight, button-first Telegram bot that automatically discovers and manages Docker containers on an Unraid server.
+A lightweight, button-first Telegram controller that automatically discovers Docker containers on an Unraid server. It does not run an LLM and is designed for small systems.
 
-## What is new in v0.3.0
+## v0.4.0 highlights
 
-You no longer need to type Docker container names.
+### Rich container status
 
-1. Open **Containers** or select an action such as **Restart**.
-2. Tap a container from the automatically generated list.
-3. Tap the action you need.
-4. Confirm actions that change container state.
+Container pages now show:
 
-Each container screen includes:
+- Running, stopped, paused, restarting, created, dead, and removing states
+- Docker health-check result
+- Uptime
+- CPU and memory usage when running
+- Restart count
+- Exit code and out-of-memory warnings
+- Compose project, image, ports, network, mounts, and restart policy
 
-- Start, stop and restart
-- Logs with selectable line counts
-- CPU, RAM and network statistics
-- Daily restart scheduling
-- Compose YAML export
-- Unraid XML template export
-- Refresh and navigation buttons
+The container list has live filters for **All**, **Running**, **Stopped**, and **Unhealthy**.
 
-Action lists are filtered automatically. For example, **Start** displays stopped containers, while **Stop**, **Restart**, and **Stats** display running containers.
+### Compose stack management
 
-## Simple setup
+The bot reads Docker Compose labels automatically and groups containers into projects. Open **Stacks** to:
+
+- View every container and state in a project
+- Start stopped containers in the project
+- Stop running containers in the project
+- Restart running containers in the project
+- Export the complete project as a ZIP
+
+Containers without Compose labels are kept in separate single-container `Standalone: NAME` groups. They are deliberately not combined into one dangerous bulk-action group.
+
+Stack actions require confirmation and skip protected containers.
+
+### Monitoring and alerts
+
+Optional Telegram alerts cover:
+
+- Container state changes
+- Healthy/unhealthy transitions
+- Container creation and removal
+- Possible restart loops
+- Out-of-memory kills
+- Docker daemon connection failure and recovery
+
+The monitor also disables restart schedules automatically when their container has been removed.
+
+### Export and backup
+
+Exports are available for:
+
+- One container as Compose YAML
+- One container as Unraid XML
+- One Compose stack as a ZIP
+- Every container as a ZIP
+
+Stack/all ZIP files contain:
+
+```text
+stack-name.compose.yaml
+manifest.json
+unraid/my-container.xml
+```
+
+Environment variables, labels, command arguments, and URLs are sanitized when they appear to contain passwords, tokens, API keys, credentials, claims, cookies, sessions, or embedded URL usernames/passwords. Always review an export before restoring it.
+
+### Safer schedules
+
+Daily restart schedules are now:
+
+- Duplicate-safe for the same container and time
+- Retried after a configurable delay when a restart fails
+- Limited to a configurable maximum number of attempts
+- Automatically disabled when a container disappears
+- Recorded in the audit log with failure details
+
+### Diagnostics and account controls
+
+- `/diagnostics` downloads a sanitized ZIP containing server/container metadata, schedules, and recent audit entries.
+- Telegram tokens and pairing codes are never included.
+- `/settings` shows active runtime settings.
+- `/unpair` removes the current Telegram owner after confirmation.
+- The displayed app version is read from the repository `VERSION` file.
+
+## Simple installation
 
 Only two values are required:
 
 - Telegram bot token from `@BotFather`
-- A private pairing code chosen by you
+- A private pairing code
 
-The bot discovers all current and future Docker containers automatically. There is no container allowlist to maintain.
-
-## One-command install on Unraid
-
-After this repository is public:
+After the GitHub repository is public:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/flavius-vfe/VFE-BOT-T/main/install.sh | bash
 ```
 
-The installer clones the repository into `/mnt/user/appdata/vfe-bot-t`, asks for the token and pairing code, builds the image, and starts the bot.
+The default installation directory is:
 
-Then open the Telegram bot in a private chat and send:
+```text
+/mnt/user/appdata/vfe-bot-t
+```
+
+Then open a private Telegram chat with the bot and send:
 
 ```text
 /pair YOUR_PAIRING_CODE
 ```
 
-## Manual install
+## Manual installation
 
 ```bash
 cd /mnt/user/appdata
@@ -57,100 +116,90 @@ cd vfe-bot-t
 bash install.sh
 ```
 
-## Button-first commands
+## Main commands
 
-These commands open menus; container names are optional:
+Container names remain optional.
 
 ```text
-/containers     select and manage any container
-/server         Docker, CPU, RAM and storage summary
-/startc         select a stopped container to start
-/stop           select a running container to stop
-/restart        select a running container to restart
+/containers     live container list and filters
+/stacks         Compose project list and bulk actions
+/server         Docker, CPU, RAM, and storage summary
+/startc         select a stopped container
+/stop           select a running container
+/restart        select a running container
 /logs           select a container and log length
 /stats          select a running container
 /schedule       select a container and restart time
-/export         select a container and YAML/XML format
-/schedules      view and disable schedules using buttons
+/export         one-container, stack, or all-profile exports
+/schedules      view and disable restart schedules
+/settings       current bot settings
+/diagnostics    sanitized support ZIP
 /audit          recent actions
+/unpair         remove the paired Telegram owner
 /help           main menu
 ```
 
-Typed commands such as `/restart plex` still work, but they are no longer required.
+Typed commands such as `/restart plex` still work.
 
-## Container profile export
-
-Open a container, tap **Export**, then choose:
-
-- **Compose YAML** — a Docker Compose-style service profile
-- **Unraid XML** — an Unraid Docker template profile
-
-The export includes the image, environment variables, ports, paths, restart policy, network mode, command, labels and other relevant container settings.
-
-For safety, environment values whose names contain terms such as `TOKEN`, `PASSWORD`, `SECRET`, `API_KEY`, `AUTH`, or `CLAIM` are exported as:
-
-```text
-<redacted>
-```
-
-Replace those placeholders manually before using an exported profile.
-
-## Automatic discovery
-
-The bot queries Docker whenever a container menu is opened. New containers appear automatically after they are created in Unraid. Removed containers disappear automatically.
-
-The bot protects its own `vfe-bot-t` container from start, stop, restart and scheduling operations. Add other protected names in `.env`:
-
-```dotenv
-PROTECTED_CONTAINERS=swag,cloudflared,mariadb
-```
-
-Read-only actions such as status, logs, statistics and export remain available for protected containers.
-
-## Updating an existing installation
+## Updating
 
 ```bash
 cd /mnt/user/appdata/vfe-bot-t
 bash update.sh
 ```
 
-To force a clean image rebuild after this release:
+Or manually:
 
 ```bash
 cd /mnt/user/appdata/vfe-bot-t
-git pull
-docker compose build --no-cache
-docker compose up -d
+git pull --ff-only
+docker compose up -d --build --remove-orphans
 ```
 
-Telegram command menus are refreshed automatically when the new container starts.
+The existing database is migrated automatically at startup.
 
 ## Configuration
 
-The installer creates `.env`. Common options:
+The installer creates `.env`. Useful settings:
 
 ```dotenv
 TZ=Europe/Bucharest
+BOT_CONTAINER_NAME=vfe-bot-t
+PROTECTED_CONTAINERS=swag,cloudflared,mariadb
+
 NOTIFY_CONTAINER_CHANGES=true
+NOTIFY_HEALTH_CHANGES=true
+NOTIFY_CREATED_REMOVED=true
 POLL_INTERVAL_SECONDS=30
+RESTART_LOOP_THRESHOLD=3
+
+SCHEDULE_RETRY_MINUTES=5
+SCHEDULE_MAX_ATTEMPTS=3
+
 LOG_LINES_DEFAULT=50
 LOG_LINES_MAX=300
-PROTECTED_CONTAINERS=
+DIAGNOSTICS_AUDIT_LIMIT=50
 ```
 
-To pair with a different Telegram account, stop the bot and remove `data/vfe-bot.db`, then start it and pair again.
+The bot always adds its own container name to the protected set.
 
 ## Resource use
 
-The Compose file limits the bot to 192 MB of RAM and 80 processes. It does not run an LLM.
+The Compose configuration limits the bot to 192 MB RAM and 80 processes. Actual use depends on the number of containers and Telegram activity. Collecting live stats is performed when opening a container or stats screen, not continuously for every container.
 
 ## Security warning
 
-For simple installation this version mounts `/var/run/docker.sock`. Access to that socket is highly privileged. Keep the Telegram token and pairing code secret, pair only in a private chat, and protect the Telegram account with two-step verification.
+For simple installation, this project mounts:
 
-The bot intentionally does not offer arbitrary shell execution, container deletion or container creation.
+```text
+/var/run/docker.sock
+```
 
-## Development
+Docker socket access is effectively administrator-level access to the Docker host. Keep the Telegram token and pairing code secret, pair only in a private chat, enable Telegram two-step verification, and protect critical containers using `PROTECTED_CONTAINERS`.
+
+The bot intentionally does not expose arbitrary shell execution, container creation, container deletion, or free-form Docker API calls.
+
+## Development and testing
 
 ```bash
 python -m venv .venv
@@ -158,3 +207,5 @@ python -m venv .venv
 pip install -r requirements-dev.txt
 PYTHONPATH=. pytest -q
 ```
+
+The Docker image copies `VERSION` into the runtime so the displayed version matches the release package.

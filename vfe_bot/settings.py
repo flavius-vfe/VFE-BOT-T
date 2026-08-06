@@ -28,6 +28,12 @@ class Settings:
     log_lines_default: int
     log_lines_max: int
     host_storage_path: str
+    notify_health_changes: bool = True
+    notify_created_removed: bool = True
+    restart_loop_threshold: int = 3
+    schedule_retry_minutes: int = 5
+    schedule_max_attempts: int = 3
+    diagnostics_audit_limit: int = 50
 
     @classmethod
     def load(cls) -> "Settings":
@@ -54,4 +60,10 @@ class Settings:
             log_lines_default=max(1, int(os.getenv("LOG_LINES_DEFAULT", "50"))),
             log_lines_max=max(50, int(os.getenv("LOG_LINES_MAX", "300"))),
             host_storage_path=os.getenv("HOST_STORAGE_PATH", "/host-mnt/user"),
+            notify_health_changes=_bool("NOTIFY_HEALTH_CHANGES", True),
+            notify_created_removed=_bool("NOTIFY_CREATED_REMOVED", True),
+            restart_loop_threshold=max(2, int(os.getenv("RESTART_LOOP_THRESHOLD", "3"))),
+            schedule_retry_minutes=max(1, int(os.getenv("SCHEDULE_RETRY_MINUTES", "5"))),
+            schedule_max_attempts=max(1, int(os.getenv("SCHEDULE_MAX_ATTEMPTS", "3"))),
+            diagnostics_audit_limit=max(10, min(100, int(os.getenv("DIAGNOSTICS_AUDIT_LIMIT", "50")))),
         )

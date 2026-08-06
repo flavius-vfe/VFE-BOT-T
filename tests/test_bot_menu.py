@@ -11,9 +11,9 @@ from vfe_bot.settings import Settings
 class FakeDocker:
     def list_containers(self):
         return [
-            {"id": "run123", "name": "plex", "status": "running", "image": "plex", "protected": False},
-            {"id": "stop123", "name": "sonarr", "status": "exited", "image": "sonarr", "protected": False},
-            {"id": "bot123", "name": "vfe-bot-t", "status": "running", "image": "bot", "protected": True},
+            {"id": "run123", "name": "plex", "status": "running", "health": "healthy", "image": "plex", "protected": False},
+            {"id": "stop123", "name": "sonarr", "status": "exited", "health": None, "image": "sonarr", "protected": False},
+            {"id": "bot123", "name": "vfe-bot-t", "status": "running", "health": None, "image": "bot", "protected": True},
         ]
 
     def info(self, target: str):
@@ -99,3 +99,36 @@ def test_container_card_contains_all_button_actions(tmp_path) -> None:
     assert "stats:run123" in callbacks
     assert "sched:run123" in callbacks
     assert "export:run123" in callbacks
+
+
+def test_container_list_shows_explicit_live_status(tmp_path) -> None:
+    db = Database(str(tmp_path / "bot.db"))
+    db.initialize()
+    telegram = FakeTelegram()
+    bot = VFEBot(settings(tmp_path), db, FakeDocker(), telegram)  # type: ignore[arg-type]
+
+    asyncio.run(bot.send_container_page(2, 0, "manage"))
+    message = telegram.messages[-1]
+    labels = [
+        button["text"]
+        for row in message["reply_markup"]["inline_keyboard"]
+        for button in row
+    ]
+    assert any("plex — RUNNING/HEALTHY" in label for label in labels)
+    assert any("sonarr — STOPPED" in label for label in labels)
+    assert "🟢 2 running · 🔴 1 stopped" in message["text"]
+
+
+def test_manage_menu_has_state_filters(tmp_path) -> None:
+    db = Database(str(tmp_path / "bot.db"))
+    db.initialize()
+    telegram = FakeTelegram()
+    bot = VFEBot(settings(tmp_path), db, FakeDocker(), telegram)  # type: ignore[arg-type]
+
+    asyncio.run(bot.send_container_page(2, 0, "manage", filter_name="running"))
+    markup = telegram.messages[-1]["reply_markup"]
+    callbacks = [button["callback_data"] for row in markup["inline_keyboard"] for button in row]
+    assert "list:manage:0:all" in callbacks
+    assert "list:manage:0:running" in callbacks
+    assert "list:manage:0:stopped" in callbacks
+    assert "list:manage:0:unhealthy" in callbacks

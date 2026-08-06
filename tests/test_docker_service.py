@@ -43,7 +43,7 @@ class FakeContainer:
                 "User": "1000:1000",
                 "Hostname": name,
             },
-            "State": {"StartedAt": "now", "Health": {"Status": "healthy"}},
+            "State": {"Status": status, "StartedAt": "now", "Health": {"Status": "healthy"}},
             "HostConfig": {
                 "RestartPolicy": {"Name": "unless-stopped"},
                 "NetworkMode": "bridge",
@@ -109,6 +109,8 @@ def test_auto_discovery_and_protection(tmp_path) -> None:
     service = DockerService({"vfe-bot-t"}, str(tmp_path), client=FakeClient())
     items = service.list_containers()
     assert [item["name"] for item in items] == ["plex", "vfe-bot-t"]
+    assert items[0]["status"] == "running"
+    assert items[0]["health"] == "healthy"
     assert items[1]["protected"] is True
     assert service.mutate("restart", "plex")["status"] == "running"
 
@@ -147,3 +149,58 @@ def test_yaml_and_unraid_xml_export_redact_secrets(tmp_path) -> None:
     variables = {item.attrib.get("Name"): item.text for item in root.findall("Config") if item.attrib.get("Type") == "Variable"}
     assert variables["NORMAL"] == "value"
     assert variables["API_TOKEN"] == "<redacted>"
+
+
+def test_standalone_containers_are_not_grouped_into_one_stack(tmp_path) -> None:
+    service = DockerService({"vfe-bot-t"}, str(tmp_path), client=FakeClient())
+    projects = service.list_projects()
+    assert {item["name"] for item in projects} == {"Standalone: plex", "Standalone: vfe-bot-t"}
+
+
+def test_export_all_bundle_contains_compose_xml_and_manifest(tmp_path) -> None:
+    import io
+    import json
+    import zipfile
+
+    service = DockerService({"vfe-bot-t"}, str(tmp_path), client=FakeClient())
+    filename, content, content_type = service.export_all()
+    assert filename == "all-container-profiles.zip"
+    assert content_type == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        names = set(archive.namelist())
+        assert "all-container-profiles.compose.yaml" in names
+        assert "manifest.json" in names
+        assert "unraid/my-plex.xml" in names
+        manifest = json.loads(archive.read("manifest.json"))
+        assert manifest["container_count"] == 2
+
+
+def test_compose_project_group_action_and_export(tmp_path) -> None:
+    import io
+    import zipfile
+
+    plex = FakeContainer("plex", "running", "abc123")
+    sonarr = FakeContainer("sonarr", "running", "ghi789")
+    plex.attrs["Config"]["Labels"]["com.docker.compose.project"] = "media"
+    plex.attrs["Config"]["Labels"]["com.docker.compose.service"] = "plex"
+    sonarr.attrs["Config"]["Labels"]["com.docker.compose.project"] = "media"
+    sonarr.attrs["Config"]["Labels"]["com.docker.compose.service"] = "sonarr"
+    client = type("Client", (), {"containers": FakeContainers([plex, sonarr])})()
+    service = DockerService(set(), str(tmp_path), client=client)
+
+    projects = service.list_projects()
+    assert len(projects) == 1
+    assert projects[0]["name"] == "media"
+    assert projects[0]["running"] == 2
+
+    result = service.mutate_project("restart", projects[0]["token"])
+    assert result["project"] == "media"
+    assert {item["name"] for item in result["results"]} == {"plex", "sonarr"}
+
+    filename, content, content_type = service.export_project(projects[0]["token"])
+    assert filename == "stack-media.zip"
+    assert content_type == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        assert "stack-media.compose.yaml" in archive.namelist()
+        assert "unraid/my-plex.xml" in archive.namelist()
+        assert "unraid/my-sonarr.xml" in archive.namelist()
