@@ -60,6 +60,27 @@ class TelegramAPI:
             payload["reply_markup"] = reply_markup
         return await self.call("editMessageText", payload)
 
+    async def send_document(
+        self,
+        chat_id: int,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        caption: str = "",
+    ) -> Any:
+        data: dict[str, str] = {
+            "chat_id": str(chat_id),
+            "caption": caption,
+            "parse_mode": "HTML",
+        }
+        files = {"document": (filename, content, content_type)}
+        response = await self.client.post("sendDocument", data=data, files=files)
+        response.raise_for_status()
+        payload = response.json()
+        if not payload.get("ok"):
+            raise RuntimeError(payload.get("description", "Telegram sendDocument failed"))
+        return payload.get("result")
+
     async def answer_callback(self, callback_id: str, text: str = "") -> None:
         try:
             await self.call("answerCallbackQuery", {"callback_query_id": callback_id, "text": text[:180]})
@@ -74,11 +95,7 @@ class TelegramAPI:
         for index in range(0, len(text), max_chunk):
             chunk = text[index:index + max_chunk]
             prefix = header if index == 0 else ""
-            escaped = (
-                chunk.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-            )
+            escaped = chunk.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             await self.send(chat_id, f"{prefix}<pre>{escaped}</pre>")
             if index + max_chunk < len(text):
                 await asyncio.sleep(0.1)

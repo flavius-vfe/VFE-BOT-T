@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import sys
 import types
+import xml.etree.ElementTree as ET
+
+import yaml
 
 try:
     import docker  # type: ignore # noqa: F401
@@ -30,10 +33,36 @@ class FakeContainer:
         self.status = status
         self.short_id = short_id
         self.attrs = {
-            "Config": {"Image": f"example/{name}:latest"},
-            "State": {"StartedAt": "now"},
-            "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
+            "Config": {
+                "Image": f"example/{name}:latest",
+                "Env": ["NORMAL=value", "API_TOKEN=very-secret", "PLEX_CLAIM=claim-secret"],
+                "Labels": {"app": name},
+                "Cmd": ["--serve"],
+                "Entrypoint": ["/entrypoint"],
+                "WorkingDir": "/app",
+                "User": "1000:1000",
+                "Hostname": name,
+            },
+            "State": {"StartedAt": "now", "Health": {"Status": "healthy"}},
+            "HostConfig": {
+                "RestartPolicy": {"Name": "unless-stopped"},
+                "NetworkMode": "bridge",
+                "PortBindings": {"32400/tcp": [{"HostIp": "", "HostPort": "32400"}]},
+                "Devices": [],
+                "Privileged": False,
+                "CapAdd": [],
+                "Dns": [],
+                "ExtraHosts": [],
+            },
             "NetworkSettings": {"Networks": {"bridge": {}}},
+            "Mounts": [
+                {
+                    "Source": "/mnt/user/appdata/plex",
+                    "Destination": "/config",
+                    "RW": True,
+                    "Type": "bind",
+                }
+            ],
             "Created": "today",
         }
 
@@ -89,3 +118,32 @@ def test_auto_discovery_and_protection(tmp_path) -> None:
         pass
     else:
         raise AssertionError("protected container mutation should fail")
+
+
+def test_yaml_and_unraid_xml_export_redact_secrets(tmp_path) -> None:
+    service = DockerService({"vfe-bot-t"}, str(tmp_path), client=FakeClient())
+
+    yaml_name, yaml_bytes, yaml_type = service.export_profile("plex", "yaml")
+    assert yaml_name == "plex.compose.yaml"
+    assert yaml_type == "application/yaml"
+    yaml_text = yaml_bytes.decode()
+    assert yaml_text.startswith("# Exported by VFE Docker Bot")
+    compose = yaml.safe_load(yaml_text)
+    plex = compose["services"]["plex"]
+    assert plex["image"] == "example/plex:latest"
+    assert plex["environment"]["NORMAL"] == "value"
+    assert plex["environment"]["API_TOKEN"] == "<redacted>"
+    assert plex["environment"]["PLEX_CLAIM"] == "<redacted>"
+    assert "32400:32400/tcp" in plex["ports"]
+    assert "/mnt/user/appdata/plex:/config:rw" in plex["volumes"]
+
+    xml_name, xml_bytes, xml_type = service.export_profile("plex", "xml")
+    assert xml_name == "my-plex.xml"
+    assert xml_type == "application/xml"
+    root = ET.fromstring(xml_bytes)
+    assert root.tag == "Container"
+    assert root.findtext("Name") == "plex"
+    assert root.findtext("Repository") == "example/plex:latest"
+    variables = {item.attrib.get("Name"): item.text for item in root.findall("Config") if item.attrib.get("Type") == "Variable"}
+    assert variables["NORMAL"] == "value"
+    assert variables["API_TOKEN"] == "<redacted>"
